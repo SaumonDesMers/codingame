@@ -20,6 +20,7 @@
 #include <queue>
 
 typedef uint64_t State;
+typedef uint64_t Count;
 /*
 0 to 8 bits: tell if the position is empty or not
 9 to 36 bits: tell the value of the die on this position, with 3 bits for each position
@@ -37,40 +38,17 @@ positions:
 6 7 8
 */
 
-#define GET_DIE_VALUE(state, position) ((state >> ((position) * 3 + 9)) & uint64_t(0b111))
-#define CLEAR_DIE_VALUE(state, position) (state & ~(uint64_t(0b111) << ((position) * 3 + 9)))
-#define SET_DIE_VALUE(state, position, value) (state | ((value) << ((position) * 3 + 9)))
+#define GET_DIE_VALUE(state, position) ((state >> (position * 3 + 9)) & uint64_t(0b111))
+#define CLEAR_DIE_VALUE(state, position) (state & ~(uint64_t(0b111) << (position * 3 + 9)))
+#define SET_DIE_VALUE(state, position, value) (state | ((value) << (position * 3 + 9)))
 
 #define GET_DIE_SUM(state) ((state >> 37) & uint64_t(0b111111))
 #define CLEAR_SUM(state) (state & ~(uint64_t(0b111111) << 37))
 #define SET_SUM(state, value) (state | ((value) << 37))
 
-#define IS_POSITION_EMPTY(state, position) ((state & (1 << (position))) == 0)
-#define SET_POSITION(state, position) (state | (1 << (position)))
-#define CLEAR_POSITION(state, position) (state & ~(1 << (position)))
-
-class StateComparator
-{
-public:
-	bool operator()(const State& lhs, const State& rhs) const
-	{
-		// the first should be the one with the smallest sum then the highest number of die
-		const uint64_t lhs_sum = GET_DIE_SUM(lhs);
-		const uint64_t rhs_sum = GET_DIE_SUM(rhs);
-		if (lhs_sum != rhs_sum)
-			return lhs_sum < rhs_sum;
-		
-		// if the sum is the same, we compare the number of die
-		const int lhs_count = __builtin_popcountll(lhs & uint64_t(0b111111111));
-		const int rhs_count = __builtin_popcountll(rhs & uint64_t(0b111111111));
-		if (lhs_count != rhs_count)
-			return lhs_count > rhs_count;
-		
-		// if the number of die is the same, we compare the state itself
-		return lhs < rhs;
-	}
-};
-
+#define IS_POSITION_EMPTY(state, position) ((state & (1 << position)) == 0)
+#define SET_POSITION(state, position) (state | (1 << position))
+#define CLEAR_POSITION(state, position) (state & ~(1 << position))
 
 // masks to get the neighbor die presence (first 9 bits) for each position
 const std::array<State, 9> neighbors_mask = {
@@ -102,31 +80,15 @@ const std::array<std::array<uint8_t, 9>, 8> symmetric_positions = {
 	}
 };
 
-
 constexpr uint64_t MOD = 1ULL << 30;
 
-uint8_t max_depth = 0;
+int max_depth;
+int current_depth;
+std::unordered_map<State, std::array<Count, 8>> states_to_process;
+std::unordered_map<State, std::array<Count, 8>> new_states_to_process;
 std::unordered_map<State, uint64_t> final_states;
-std::unordered_map<State, uint64_t> visited_states;
 
-#define COUNT_ARRAY_SIZE 40
-struct StateData
-{
-	std::array<std::array<uint32_t, COUNT_ARRAY_SIZE>, 8> count_array = {{0}};
-	// std::array<uint32_t, COUNT_ARRAY_SIZE> count_array = {0};
-};
-std::map<State, StateData, StateComparator> unique_states;
-
-struct SymmetricStateData
-{
-	State canonical_state;
-	int symmetry;
-};
-std::unordered_map<State, SymmetricStateData> symmetric_states;
-
-std::vector<std::string> log;
 std::string current_log;
-
 
 State set_die(State state, uint64_t position, uint64_t value)
 {
@@ -167,22 +129,11 @@ void print_state(State state)
 		for (int j = 0; j < 3; j++)
 		{
 			const int die_value = GET_DIE_VALUE(state, i * 3 + j);
-			std::cerr << die_value << " ";
+			std::cout << die_value << " ";
 		}
-		std::cerr << std::endl;
+		std::cout << std::endl;
 	}
-	std::cerr << std::endl;
-}
-
-void print_state_binary(State state)
-{
-	std::cerr << std::bitset<22>(state >> 45) << " ";
-	std::cerr << std::bitset<6>(state >> 37 & uint64_t(0b111111)) << " ";
-	for (int i = 8; i >= 0; i--)
-	{
-		std::cerr << std::bitset<3>((state >> (i * 3 + 9)) & uint64_t(0b111)) << " ";
-	}
-	std::cerr << std::bitset<9>(state & uint64_t(0b111111111)) << std::endl;
+	std::cout << std::endl;
 }
 
 int state_hash(State state)
@@ -234,77 +185,38 @@ int get_canonical_state(std::array<State, 8> &symmetric_states)
 }
 
 
-void insert_final_state(State new_state, uint64_t count)
-{
-	auto [it, is_inserted] = final_states.insert({new_state, count});
-	if (!is_inserted)
-	{
-		it->second += count;
-	}
-}
-
-void insert_final_state_full_board(State new_state, StateData &data)
+void insert_final_state(State new_state, std::array<Count, 8> & counts)
 {
 	for (int symmetry = 0; symmetry < 8; symmetry++)
 	{
-		uint32_t count_sum = 0;
-		for (int depth = 0; depth < max_depth + 1; depth++)
+		State symmetric_state = get_symmetric_state(new_state, symmetry);
+		auto [it, is_inserted] = final_states.insert({symmetric_state, counts[symmetry]});
+		if (!is_inserted)
 		{
-			count_sum += data.count_array[symmetry][depth];
+			it->second += counts[symmetry];
 		}
-		if (count_sum == 0)
-			continue;
-		current_log += "-" + std::to_string(count_sum);
-		State state = get_symmetric_state(new_state, symmetry);
-		insert_final_state(new_state, count_sum);
 	}
 }
 
-void insert_unique_state(State new_state, StateData &data)
+void insert_new_state_to_process(State new_state, std::array<Count, 8> & counts)
 {
-	bool no_count = true;
-	for (int symetry = 0; symetry < 8; symetry++)
+	if (current_depth == max_depth - 1)
 	{
-		if (data.count_array[symetry][max_depth] > 0)
-		{
-			current_log += " fd-" + std::to_string(state_hash(new_state));
-			insert_final_state(new_state, data.count_array[symetry][max_depth]);
-		}
-		for (int depth = 0; depth < max_depth; depth++)
-		{
-			if (data.count_array[symetry][depth] > 0)
-			{
-				no_count = false;
-				break;
-			}
-		}
-	}
-	if (no_count)
-	{
-		current_log += " no-count";
+		current_log += " fd-" + std::to_string(state_hash(new_state));
+		insert_final_state(new_state, counts);
 		return;
 	}
 
 	current_log += " " + std::to_string(state_hash(new_state));
-
-	auto [it, is_inserted] = unique_states.insert({new_state, data});
+	auto [it, is_inserted] = new_states_to_process.insert({new_state, counts});
 	if (!is_inserted)
 	{
-		for (int symetry = 0; symetry < 8; symetry++)
-		{
-			for (int depth = 0; depth < max_depth; depth++)
-			{
-				it->second.count_array[symetry][depth] += data.count_array[symetry][depth];
-			}
-		}
+		it->second += count;
 	}
-	else
-	{
-		current_log += "*";
-	}
+
 }
 
-void insert_possible_move(State new_state, StateData &data)
+void insert_possible_move(State new_state, std::array<Count, 8> & counts)
 {
 	auto transformed_states = get_all_symmetric_states(new_state);
 	int canonical_index = get_canonical_state(transformed_states);
@@ -314,26 +226,18 @@ void insert_possible_move(State new_state, StateData &data)
 	if (current_symmetry == 3) current_symmetry = 5;
 	else if (current_symmetry == 5) current_symmetry = 3;
 
-	StateData new_data;
-	// for (int symmetry = 0; symmetry < 8; symmetry++)
-	// {
-	// 	memcpy(&new_data.count_array[symmetry][1], data.count_array[symmetry].data(), max_depth * sizeof(uint32_t));
-	// 	new_data.count_array[symmetry][0] = 0;
-	// }
+	std::array<Count, 8> new_counts = counts;
 
-	memcpy(&new_data.count_array[current_symmetry][1], data.count_array[0].data(), max_depth * sizeof(uint32_t));
-	new_data.count_array[current_symmetry][0] = 0;
-
-	if ((canonical_state & uint64_t(0b111111111)) == uint64_t(0b111111111)) // Check if the board is full
+	if ((new_state & uint64_t(0b111111111)) == uint64_t(0b111111111)) // Check if the board is full
 	{
-		current_log += " ff-" + std::to_string(state_hash(canonical_state));
-		insert_final_state_full_board(canonical_state, new_data);
+		current_log += " ff-" + std::to_string(state_hash(new_state));
+		insert_final_state(new_state, counts);
 		return;
 	}
-	insert_unique_state(canonical_state, new_data);
+	insert_new_state_to_process(new_state, counts);
 }
 
-void get_possible_moves(State state, StateData &data)
+void get_possible_moves(State state, std::array<Count, 8> & counts)
 {
 	for (int i = 0; i < 9; i++)
 	{
@@ -352,7 +256,7 @@ void get_possible_moves(State state, StateData &data)
 				State new_state = remove_die(state, i0); \
 				new_state = remove_die(new_state, i1); \
 				new_state = set_die(new_state, i, sum); \
-				insert_possible_move(new_state, data); \
+				insert_possible_move(new_state, counts); \
 				capture_possible = true; \
 			} \
 		}
@@ -366,7 +270,7 @@ void get_possible_moves(State state, StateData &data)
 				new_state = remove_die(new_state, i1); \
 				new_state = remove_die(new_state, i2); \
 				new_state = set_die(new_state, i, sum); \
-				insert_possible_move(new_state, data); \
+				insert_possible_move(new_state, counts); \
 				capture_possible = true; \
 			} \
 		}
@@ -424,19 +328,16 @@ void get_possible_moves(State state, StateData &data)
 				new_state = remove_die(new_state, third_neighbor_index);
 				new_state = remove_die(new_state, fourth_neighbor_index);
 				new_state = set_die(new_state, i, sum);
-				insert_possible_move(new_state, data);
+				insert_possible_move(new_state, counts);
 				capture_possible = true;
 			}
 		}
 		
 		if (neighbor_count < 2 || !capture_possible)
 		{
-			insert_possible_move(set_die(state, i, 1), data);
+			insert_possible_move(set_die(state, i, 1), counts);
 		}
 	}
-
-#undef two_sum
-#undef three_sum
 }
 
 int compute_final_sum()
@@ -444,18 +345,19 @@ int compute_final_sum()
 	int final_sum = 0;
 	for (const auto& [state, count] : final_states)
 	{
-		const int hash = state_hash(state);
-		// std::cerr << "State hash: " << hash << " count: " << count << std::endl;
-		final_sum = (final_sum + hash * count);
+		int state_hash = 0;
+		for (int i = 0; i < 9; i++)
+		{
+			state_hash = state_hash * 10 + GET_DIE_VALUE(state, i);
+		}
+		final_sum = (final_sum + state_hash * count);
 	}
 	return final_sum % MOD;
 }
 
 int main()
 {
-	uint32_t d;
-	std::cin >> d; std::cin.ignore();
-	max_depth = d;
+	std::cin >> max_depth; std::cin.ignore();
 	
 	State initial_state = 0;
 	for (int i = 0; i < 3; i++)
@@ -469,99 +371,37 @@ int main()
 			initial_state = set_die(initial_state, i * 3 + j, value);
 		}
 	}
-
-
-
-	// std::string state_str = "060"
-	// 						"222"
-	// 						"161";
-	// State state = 0;
-	// for (int i = 0; i < 9; i++)
-	// {
-	// 	if (state_str[i] == '0')
-	// 		continue;
-	// 	state = set_die(state, i, state_str[i] - '0');
-	// }
-	// std::cerr << "Initial state: " << std::endl;
-	// print_state(state);
-
-	// auto states = get_all_symmetric_states(state);
-
 	
-	// int canonical_index = get_canonical_state(states);
-	// State canonical = states[canonical_index];
-	// std::cerr << "Canonical state: " << canonical_index << std::endl;
-	// print_state(canonical);
-
-	// // auto canonical_states = get_all_symmetric_states(canonical);
-	// // for (int i = 0; i < 8; i++)
-	// // {
-	// // 	symmetric_states[canonical_states[i]] = {canonical, i};
-	// // }
-	// // std::cerr << symmetric_states[state].symmetry << std::endl;
-
-	// // State symmetric_state = get_symmetric_state(canonical, symmetric_states[state].symmetry);
-	// // print_state(symmetric_state);
-
-	// return 0;
-
-
-
-
-
-	if (max_depth > COUNT_ARRAY_SIZE)
-	{
-		std::cerr << "Max depth is too high" << std::endl;
-		return 1;
-	}
-	
+	new_states_to_process.reserve(100000);
 	final_states.reserve(100000);
+	states_to_process.insert({initial_state, {0}});
+	states_to_process[initial_state][0] = 1;
 
-	unique_states.insert({
-		initial_state,
-		{
-			.count_array = {{0}}
-		}
-	});
-	unique_states[initial_state].count_array[0][0] = 1;
 	int iteration = 0;
-	while (!unique_states.empty())
+	for (current_depth = 0; current_depth < max_depth; current_depth++)
 	{
-		auto [state, data] = *unique_states.begin();
+		std::cout << "depth: " << (current_depth+1) << "/" << max_depth << std::endl;
+		std::cout << "states to process: " << states_to_process.size() << std::endl;
 
-		unique_states.erase(unique_states.begin());
-
-		current_log = std::to_string(state_hash(state)) + " ->";
-
-		for (int symmetry = 0; symmetry < 8; symmetry++)
-		{
-			std::string depth_str;
-			for (int depth = 0; depth < max_depth; depth++)
-			{
-				if (data.count_array[symmetry][depth] > 0)
-				{
-					depth_str += "-" + std::to_string(depth) + "(" + std::to_string(data.count_array[symmetry][depth]) + ")";
-				}
-			}
-			if (!depth_str.empty())
-			{
-				current_log += " t" + std::to_string(symmetry) + depth_str;
-			}
-		}
-		current_log += ":";
+		if (states_to_process.empty())
+			break;
 		
-		get_possible_moves(state, data);
+		new_states_to_process.clear();
+		for (const auto& [state, counts] : states_to_process)
+		{
+			current_log = std::to_string(state_hash(state)) + ":";
 
-		std::cout << current_log << std::endl;
-		iteration++;
+			get_possible_moves(state, counts);
+
+			std::cout << current_log << std::endl;
+			iteration++;
+		}
+		states_to_process = std::move(new_states_to_process);
+
+		std::cout << std::endl;
 	}
-	std::cerr << "Iterations: " << iteration << std::endl;
+	std::cout << "Iterations: " << iteration << std::endl;
 
 	const int final_sum = compute_final_sum();
 	std::cout << final_sum << std::endl;
-
-	{ // I have no idea why but if I remove this block, the program crashes (or at least timeout on codingame, which I believe is a crash)
-		std::unordered_map<uint64_t, uint64_t> nothing;
-		nothing.count(0);
-	}
 }
