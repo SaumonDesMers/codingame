@@ -42,10 +42,6 @@ positions:
 #define CLEAR_DIE_VALUE(state, position) (state & ~(uint64_t(0b111) << (position * 3 + 9)))
 #define SET_DIE_VALUE(state, position, value) (state | ((value) << (position * 3 + 9)))
 
-#define GET_DIE_SUM(state) ((state >> 37) & uint64_t(0b111111))
-#define CLEAR_SUM(state) (state & ~(uint64_t(0b111111) << 37))
-#define SET_SUM(state, value) (state | ((value) << 37))
-
 #define IS_POSITION_EMPTY(state, position) ((state & (1 << position)) == 0)
 #define SET_POSITION(state, position) (state | (1 << position))
 #define CLEAR_POSITION(state, position) (state & ~(1 << position))
@@ -69,15 +65,26 @@ const std::array<std::array<uint8_t, 9>, 8> symmetric_positions = {
 	// 3 4 5
 	// 6 7 8
 	{
-		{0, 1, 2, 3, 4, 5, 6, 7, 8}, // left top
-		{0, 3, 6, 1, 4, 7, 2, 5, 8}, // top left
-		{2, 1, 0, 5, 4, 3, 8, 7, 6}, // right top
-		{2, 5, 8, 1, 4, 7, 0, 3, 6}, // top right
-		{6, 7, 8, 3, 4, 5, 0, 1, 2}, // left bottom
-		{6, 3, 0, 7, 4, 1, 8, 5, 2}, // bottom left
-		{8, 7, 6, 5, 4, 3, 2, 1, 0}, // right bottom
-		{8, 5, 2, 7, 4, 1, 6, 3, 0}, // bottom right
+		{0, 1, 2, 3, 4, 5, 6, 7, 8}, // left top (I)
+		{6, 7, 8, 3, 4, 5, 0, 1, 2}, // left bottom (V)
+		{2, 1, 0, 5, 4, 3, 8, 7, 6}, // right top (H)
+		{8, 7, 6, 5, 4, 3, 2, 1, 0}, // right bottom (VH)
+		{0, 3, 6, 1, 4, 7, 2, 5, 8}, // top left (D)
+		{6, 3, 0, 7, 4, 1, 8, 5, 2}, // bottom left (DV)
+		{2, 5, 8, 1, 4, 7, 0, 3, 6}, // top right (DH)
+		{8, 5, 2, 7, 4, 1, 6, 3, 0}, // bottom right (DVH)
 	}
+};
+
+const std::array<uint8_t, 64> symmetric_mult = {
+	0, 1, 2, 3, 4, 5, 6, 7,
+	1, 0, 3, 2, 6, 7, 4, 5,
+	2, 3, 0, 1, 5, 4, 7, 6,
+	3, 2, 1, 0, 7, 6, 5, 4,
+	4, 5, 6, 7, 0, 1, 2, 3,
+	5, 4, 7, 6, 2, 3, 0, 1,
+	6, 7, 4, 5, 1, 0, 3, 2,
+	7, 6, 5, 4, 3, 2, 1, 0
 };
 
 constexpr uint64_t MOD = 1ULL << 30;
@@ -99,10 +106,6 @@ State set_die(State state, uint64_t position, uint64_t value)
 	// no need to clear the die value bits because it should be empty
 	new_state = SET_DIE_VALUE(new_state, position, value);
 
-	const uint64_t old_sum = GET_DIE_SUM(new_state);
-	new_state = CLEAR_SUM(new_state);
-	new_state = SET_SUM(new_state, old_sum + value);
-
 	return new_state;
 }
 
@@ -114,10 +117,6 @@ State remove_die(State& state, uint64_t position)
 
 	const uint64_t die_value = GET_DIE_VALUE(new_state, position);
 	new_state = CLEAR_DIE_VALUE(new_state, position);
-
-	const uint64_t old_sum = GET_DIE_SUM(new_state);
-	new_state = CLEAR_SUM(new_state);
-	new_state = SET_SUM(new_state, old_sum - die_value);
 
 	return new_state;
 }
@@ -190,6 +189,10 @@ void insert_final_state(State new_state, std::array<Count, 8> & counts)
 	for (int symmetry = 0; symmetry < 8; symmetry++)
 	{
 		State symmetric_state = get_symmetric_state(new_state, symmetry);
+
+		if (counts[symmetry] == 0)
+			continue;
+
 		auto [it, is_inserted] = final_states.insert({symmetric_state, counts[symmetry]});
 		if (!is_inserted)
 		{
@@ -202,42 +205,49 @@ void insert_new_state_to_process(State new_state, std::array<Count, 8> & counts)
 {
 	if (current_depth == max_depth - 1)
 	{
-		current_log += " fd-" + std::to_string(state_hash(new_state));
+		// current_log += " fd-" + std::to_string(state_hash(new_state));
 		insert_final_state(new_state, counts);
 		return;
 	}
 
-	current_log += " " + std::to_string(state_hash(new_state));
+	// current_log += " " + std::to_string(state_hash(new_state));
 	auto [it, is_inserted] = new_states_to_process.insert({new_state, counts});
 	if (!is_inserted)
 	{
-		it->second += count;
+		for (int symmetry = 0; symmetry < 8; symmetry++)
+		{	
+			it->second[symmetry] += counts[symmetry];
+		}
 	}
+	// else
+	// {
+	// 	current_log += "*";
+	// }
 
 }
 
-void insert_possible_move(State new_state, std::array<Count, 8> & counts)
+void insert_possible_move(State new_state, const std::array<Count, 8> & counts)
 {
 	auto transformed_states = get_all_symmetric_states(new_state);
 	int canonical_index = get_canonical_state(transformed_states);
 	State canonical_state = transformed_states[canonical_index];
 
-	int current_symmetry = canonical_index;
-	if (current_symmetry == 3) current_symmetry = 5;
-	else if (current_symmetry == 5) current_symmetry = 3;
-
-	std::array<Count, 8> new_counts = counts;
-
-	if ((new_state & uint64_t(0b111111111)) == uint64_t(0b111111111)) // Check if the board is full
+	std::array<Count, 8> new_counts;
+	for (int symmetry = 0; symmetry < 8; symmetry++)
 	{
-		current_log += " ff-" + std::to_string(state_hash(new_state));
-		insert_final_state(new_state, counts);
+		new_counts[symmetry] = counts[symmetric_mult[canonical_index * 8 + symmetry]];
+	}
+
+	if ((canonical_state & uint64_t(0b111111111)) == uint64_t(0b111111111)) // Check if the board is full
+	{
+		// current_log += " ff-" + std::to_string(state_hash(canonical_state));
+		insert_final_state(canonical_state, new_counts);
 		return;
 	}
-	insert_new_state_to_process(new_state, counts);
+	insert_new_state_to_process(canonical_state, new_counts);
 }
 
-void get_possible_moves(State state, std::array<Count, 8> & counts)
+void get_possible_moves(State state, const std::array<Count, 8> & counts)
 {
 	for (int i = 0; i < 9; i++)
 	{
@@ -345,12 +355,9 @@ int compute_final_sum()
 	int final_sum = 0;
 	for (const auto& [state, count] : final_states)
 	{
-		int state_hash = 0;
-		for (int i = 0; i < 9; i++)
-		{
-			state_hash = state_hash * 10 + GET_DIE_VALUE(state, i);
-		}
-		final_sum = (final_sum + state_hash * count);
+		int hash = state_hash(state);
+		// std::cout << "Final state: " << hash << " count: " << count << std::endl;
+		final_sum = (final_sum + hash * count);
 	}
 	return final_sum % MOD;
 }
@@ -380,27 +387,32 @@ int main()
 	int iteration = 0;
 	for (current_depth = 0; current_depth < max_depth; current_depth++)
 	{
-		std::cout << "depth: " << (current_depth+1) << "/" << max_depth << std::endl;
-		std::cout << "states to process: " << states_to_process.size() << std::endl;
-
 		if (states_to_process.empty())
 			break;
+		
+		// std::cout << "depth: " << (current_depth+1) << "/" << max_depth << std::endl;
+		// std::cout << "states to process: " << states_to_process.size() << std::endl;
 		
 		new_states_to_process.clear();
 		for (const auto& [state, counts] : states_to_process)
 		{
-			current_log = std::to_string(state_hash(state)) + ":";
+			// current_log = std::to_string(state_hash(state));
+			// for (int i = 0; i < 8; i++)
+			// {
+			// 	current_log += " " + std::to_string(counts[i]);
+			// }
+			// current_log += ":";
 
 			get_possible_moves(state, counts);
 
-			std::cout << current_log << std::endl;
+			// std::cout << current_log << std::endl;
 			iteration++;
 		}
 		states_to_process = std::move(new_states_to_process);
 
-		std::cout << std::endl;
+		// std::cout << std::endl;
 	}
-	std::cout << "Iterations: " << iteration << std::endl;
+	// std::cout << "Iterations: " << iteration << std::endl;
 
 	const int final_sum = compute_final_sum();
 	std::cout << final_sum << std::endl;

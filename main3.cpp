@@ -91,15 +91,26 @@ const std::array<std::array<uint8_t, 9>, 8> symmetric_positions = {
 	// 3 4 5
 	// 6 7 8
 	{
-		{0, 1, 2, 3, 4, 5, 6, 7, 8}, // left top
-		{0, 3, 6, 1, 4, 7, 2, 5, 8}, // top left
-		{2, 1, 0, 5, 4, 3, 8, 7, 6}, // right top
-		{2, 5, 8, 1, 4, 7, 0, 3, 6}, // top right
-		{6, 7, 8, 3, 4, 5, 0, 1, 2}, // left bottom
-		{6, 3, 0, 7, 4, 1, 8, 5, 2}, // bottom left
-		{8, 7, 6, 5, 4, 3, 2, 1, 0}, // right bottom
-		{8, 5, 2, 7, 4, 1, 6, 3, 0}, // bottom right
+		{0, 1, 2, 3, 4, 5, 6, 7, 8}, // left top (I)
+		{6, 7, 8, 3, 4, 5, 0, 1, 2}, // left bottom (V)
+		{2, 1, 0, 5, 4, 3, 8, 7, 6}, // right top (H)
+		{8, 7, 6, 5, 4, 3, 2, 1, 0}, // right bottom (VH)
+		{0, 3, 6, 1, 4, 7, 2, 5, 8}, // top left (D)
+		{6, 3, 0, 7, 4, 1, 8, 5, 2}, // bottom left (DV)
+		{2, 5, 8, 1, 4, 7, 0, 3, 6}, // top right (DH)
+		{8, 5, 2, 7, 4, 1, 6, 3, 0}, // bottom right (DVH)
 	}
+};
+
+const std::array<uint8_t, 64> symmetric_mult = {
+	0, 1, 2, 3, 4, 5, 6, 7,
+	1, 0, 3, 2, 6, 7, 4, 5,
+	2, 3, 0, 1, 5, 4, 7, 6,
+	3, 2, 1, 0, 7, 6, 5, 4,
+	4, 5, 6, 7, 0, 1, 2, 3,
+	5, 4, 7, 6, 2, 3, 0, 1,
+	6, 7, 4, 5, 1, 0, 3, 2,
+	7, 6, 5, 4, 3, 2, 1, 0
 };
 
 
@@ -112,8 +123,8 @@ std::unordered_map<State, uint64_t> visited_states;
 #define COUNT_ARRAY_SIZE 40
 struct StateData
 {
-	std::array<std::array<uint32_t, COUNT_ARRAY_SIZE>, 8> count_array = {{0}};
-	// std::array<uint32_t, COUNT_ARRAY_SIZE> count_array = {0};
+	std::array<std::array<uint32_t, COUNT_ARRAY_SIZE>, 8> counts = {{0}};
+	// std::array<uint32_t, COUNT_ARRAY_SIZE> counts = {0};
 };
 std::map<State, StateData, StateComparator> unique_states;
 
@@ -250,29 +261,30 @@ void insert_final_state_full_board(State new_state, StateData &data)
 		uint32_t count_sum = 0;
 		for (int depth = 0; depth < max_depth + 1; depth++)
 		{
-			count_sum += data.count_array[symmetry][depth];
+			count_sum += data.counts[symmetry][depth];
 		}
 		if (count_sum == 0)
 			continue;
-		current_log += "-" + std::to_string(count_sum);
 		State state = get_symmetric_state(new_state, symmetry);
-		insert_final_state(new_state, count_sum);
+		current_log += "-" + std::to_string(count_sum) + "*" + std::to_string(state_hash(state));
+		insert_final_state(state, count_sum);
 	}
 }
 
 void insert_unique_state(State new_state, StateData &data)
 {
 	bool no_count = true;
-	for (int symetry = 0; symetry < 8; symetry++)
+	for (int symmetry = 0; symmetry < 8; symmetry++)
 	{
-		if (data.count_array[symetry][max_depth] > 0)
+		if (data.counts[symmetry][max_depth] > 0)
 		{
 			current_log += " fd-" + std::to_string(state_hash(new_state));
-			insert_final_state(new_state, data.count_array[symetry][max_depth]);
+			State state = get_symmetric_state(new_state, symmetry);
+			insert_final_state(state, data.counts[symmetry][max_depth]);
 		}
 		for (int depth = 0; depth < max_depth; depth++)
 		{
-			if (data.count_array[symetry][depth] > 0)
+			if (data.counts[symmetry][depth] > 0)
 			{
 				no_count = false;
 				break;
@@ -290,11 +302,11 @@ void insert_unique_state(State new_state, StateData &data)
 	auto [it, is_inserted] = unique_states.insert({new_state, data});
 	if (!is_inserted)
 	{
-		for (int symetry = 0; symetry < 8; symetry++)
+		for (int symmetry = 0; symmetry < 8; symmetry++)
 		{
 			for (int depth = 0; depth < max_depth; depth++)
 			{
-				it->second.count_array[symetry][depth] += data.count_array[symetry][depth];
+				it->second.counts[symmetry][depth] += data.counts[symmetry][depth];
 			}
 		}
 	}
@@ -310,19 +322,16 @@ void insert_possible_move(State new_state, StateData &data)
 	int canonical_index = get_canonical_state(transformed_states);
 	State canonical_state = transformed_states[canonical_index];
 
-	int current_symmetry = canonical_index;
-	if (current_symmetry == 3) current_symmetry = 5;
-	else if (current_symmetry == 5) current_symmetry = 3;
-
 	StateData new_data;
-	// for (int symmetry = 0; symmetry < 8; symmetry++)
-	// {
-	// 	memcpy(&new_data.count_array[symmetry][1], data.count_array[symmetry].data(), max_depth * sizeof(uint32_t));
-	// 	new_data.count_array[symmetry][0] = 0;
-	// }
-
-	memcpy(&new_data.count_array[current_symmetry][1], data.count_array[0].data(), max_depth * sizeof(uint32_t));
-	new_data.count_array[current_symmetry][0] = 0;
+	for (int symmetry = 0; symmetry < 8; symmetry++)
+	{
+		memcpy(
+			&new_data.counts[symmetry][1],
+			data.counts[symmetric_mult[canonical_index * 8 + symmetry]].data(),
+			max_depth * sizeof(uint32_t)
+		);
+		new_data.counts[symmetry][0] = 0;
+	}
 
 	if ((canonical_state & uint64_t(0b111111111)) == uint64_t(0b111111111)) // Check if the board is full
 	{
@@ -520,10 +529,10 @@ int main()
 	unique_states.insert({
 		initial_state,
 		{
-			.count_array = {{0}}
+			.counts = {{0}}
 		}
 	});
-	unique_states[initial_state].count_array[0][0] = 1;
+	unique_states[initial_state].counts[0][0] = 1;
 	int iteration = 0;
 	while (!unique_states.empty())
 	{
@@ -538,9 +547,9 @@ int main()
 			std::string depth_str;
 			for (int depth = 0; depth < max_depth; depth++)
 			{
-				if (data.count_array[symmetry][depth] > 0)
+				if (data.counts[symmetry][depth] > 0)
 				{
-					depth_str += "-" + std::to_string(depth) + "(" + std::to_string(data.count_array[symmetry][depth]) + ")";
+					depth_str += "-" + std::to_string(depth) + "(" + std::to_string(data.counts[symmetry][depth]) + ")";
 				}
 			}
 			if (!depth_str.empty())
@@ -552,7 +561,7 @@ int main()
 		
 		get_possible_moves(state, data);
 
-		std::cout << current_log << std::endl;
+		// std::cout << current_log << std::endl;
 		iteration++;
 	}
 	std::cerr << "Iterations: " << iteration << std::endl;
