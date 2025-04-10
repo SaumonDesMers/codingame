@@ -93,7 +93,8 @@ int max_depth;
 int current_depth;
 std::unordered_map<State, std::array<Count, 8>> states_to_process;
 std::unordered_map<State, std::array<Count, 8>> new_states_to_process;
-std::unordered_map<State, uint64_t> final_states;
+std::array<std::array<uint32_t, 9>, 8> symmetric_final_states = {0};
+int final_sum = 0;
 
 std::string current_log;
 
@@ -188,16 +189,13 @@ void insert_final_state(State new_state, std::array<Count, 8> & counts)
 {
 	for (int symmetry = 0; symmetry < 8; symmetry++)
 	{
-		State symmetric_state = get_symmetric_state(new_state, symmetry);
-
 		if (counts[symmetry] == 0)
 			continue;
-
-		auto [it, is_inserted] = final_states.insert({symmetric_state, counts[symmetry]});
-		if (!is_inserted)
-		{
-			it->second += counts[symmetry];
-		}
+		
+			
+		State symmetric_state = get_symmetric_state(new_state, symmetry);
+		const int hash = state_hash(symmetric_state);
+		final_sum += hash * counts[symmetry];
 	}
 }
 
@@ -352,13 +350,6 @@ void get_possible_moves(State state, const std::array<Count, 8> & counts)
 
 int compute_final_sum()
 {
-	int final_sum = 0;
-	for (const auto& [state, count] : final_states)
-	{
-		int hash = state_hash(state);
-		// std::cout << "Final state: " << hash << " count: " << count << std::endl;
-		final_sum = (final_sum + hash * count);
-	}
 	return final_sum % MOD;
 }
 
@@ -380,7 +371,6 @@ int main()
 	}
 	
 	new_states_to_process.reserve(100000);
-	final_states.reserve(100000);
 	states_to_process.insert({initial_state, {0}});
 	states_to_process[initial_state][0] = 1;
 
