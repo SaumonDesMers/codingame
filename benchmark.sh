@@ -4,7 +4,7 @@ total_time=0
 count=$2
 
 # Compile the C++ program
-clang++ -std=c++17 -o test_prog $1
+g++ -std=c++17 -o test_prog $1
 
 for i in $(seq 1 $count)
 do

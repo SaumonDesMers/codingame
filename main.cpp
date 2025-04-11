@@ -49,27 +49,27 @@ positions:
 #define SET_POSITION(state, position) (state | (1 << position))
 #define CLEAR_POSITION(state, position) (state & ~(1 << position))
 
-class StateComparator
-{
-public:
-	bool operator()(const State& lhs, const State& rhs) const
-	{
-		// the first should be the one with the smallest sum then the highest number of die
-		const uint64_t lhs_sum = GET_DIE_SUM(lhs);
-		const uint64_t rhs_sum = GET_DIE_SUM(rhs);
-		if (lhs_sum != rhs_sum)
-			return lhs_sum < rhs_sum;
+// class StateComparator
+// {
+// public:
+// 	bool operator()(const State& lhs, const State& rhs) const
+// 	{
+// 		// the first should be the one with the smallest sum then the highest number of die
+// 		const uint64_t lhs_sum = GET_DIE_SUM(lhs);
+// 		const uint64_t rhs_sum = GET_DIE_SUM(rhs);
+// 		if (lhs_sum != rhs_sum)
+// 			return lhs_sum < rhs_sum;
 		
-		// if the sum is the same, we compare the number of die
-		const int lhs_count = __builtin_popcountll(lhs & uint64_t(0b111111111));
-		const int rhs_count = __builtin_popcountll(rhs & uint64_t(0b111111111));
-		if (lhs_count != rhs_count)
-			return lhs_count > rhs_count;
+// 		// if the sum is the same, we compare the number of die
+// 		const int lhs_count = __builtin_popcountll(lhs & uint64_t(0b111111111));
+// 		const int rhs_count = __builtin_popcountll(rhs & uint64_t(0b111111111));
+// 		if (lhs_count != rhs_count)
+// 			return lhs_count > rhs_count;
 		
-		// if the number of die is the same, we don't care about the order
-		return true;
-	}
-};
+// 		// if the number of die is the same, we don't care about the order
+// 		return true;
+// 	}
+// };
 
 // masks to get the neighbor die presence (first 9 bits) for each position
 const std::array<State, 9> neighbors_mask = {
