@@ -18,6 +18,7 @@
 
 typedef uint32_t State;
 typedef uint32_t Count;
+typedef std::array<Count, 8> CountArray;
 
 #define GET_DIE_VALUE(state, position) ((state >> ((position) * 3)) & 0b111)
 #define CLEAR_DIE_VALUE(state, position) (state & ~(0b111 << ((position) * 3)))
@@ -35,17 +36,6 @@ const std::array<State, 9> neighbors_mask = {
 	0b000'111'000'000'000'111'000'000'000, // 6
 	0b111'000'111'000'111'000'000'000'000, // 7
 	0b000'111'000'111'000'000'000'000'000, // 8
-};
-
-const std::array<uint8_t, 72> symmetric_positions = {
-	0, 1, 2, 3, 4, 5, 6, 7, 8, // left top (I)
-	6, 7, 8, 3, 4, 5, 0, 1, 2, // left bottom (V)
-	2, 1, 0, 5, 4, 3, 8, 7, 6, // right top (H)
-	8, 7, 6, 5, 4, 3, 2, 1, 0, // right bottom (VH)
-	0, 3, 6, 1, 4, 7, 2, 5, 8, // top left (D)
-	6, 3, 0, 7, 4, 1, 8, 5, 2, // bottom left (DV)
-	2, 5, 8, 1, 4, 7, 0, 3, 6, // top right (DH)
-	8, 5, 2, 7, 4, 1, 6, 3, 0, // bottom right (DVH)
 };
 
 const std::array<uint8_t, 64> symmetric_mult = {
@@ -73,21 +63,11 @@ constexpr State MASK_8 = 0x7 << 24;
 
 int max_depth;
 int current_depth;
-std::unordered_map<State, std::array<Count, 8>> states_to_process;
-std::unordered_map<State, std::array<Count, 8>> new_states_to_process;
+std::unordered_map<State, CountArray> states_to_process;
+std::unordered_map<State, CountArray> new_states_to_process;
 uint32_t final_sum = 0;
 
 // std::string log;
-
-State set_die(const State state, const uint64_t position, const uint64_t value)
-{
-	return SET_DIE_VALUE(state, position, value);
-}
-
-State remove_die(const State state, const uint64_t position)
-{
-	return CLEAR_DIE_VALUE(state, position);
-}
 
 void print_state(const State state)
 {
@@ -127,7 +107,6 @@ State create_state(const std::string & state_str)
 	}
 	return state;
 }
-
 
 State get_symmetric_state(const State state, const int symmetry)
 {
@@ -179,24 +158,7 @@ State get_symmetric_state(const State state, const int symmetry)
 	return state;
 }
 
-std::pair<State, int> get_canonical_state(const State state)
-{
-	int canonical_index = 0;
-	State canonical_state = state;
-	for (int i = 1; i < 8; i++)
-	{
-		const State symmetric_state = get_symmetric_state(state, i);
-		if (symmetric_state < canonical_state)
-		{
-			canonical_index = i;
-			canonical_state = symmetric_state;
-		}
-	}
-	return { canonical_state, canonical_index };
-}
-
-
-void insert_final_state(const State new_state, const std::array<Count, 8> & counts)
+void insert_final_state(const State new_state, const CountArray & counts)
 {
 	for (int symmetry = 0; symmetry < 8; symmetry++)
 	{
@@ -204,12 +166,16 @@ void insert_final_state(const State new_state, const std::array<Count, 8> & coun
 			continue;
 			
 		const State symmetric_state = get_symmetric_state(new_state, symmetry);
-		const int hash = state_hash(symmetric_state);
+		int hash = 0;
+		for (int i = 0; i < 9; i++)
+		{
+			hash = hash * 10 + GET_DIE_VALUE(symmetric_state, i);
+		}
 		final_sum += hash * counts[symmetry];
 	}
 }
 
-void insert_new_state_to_process(const State new_state, const std::array<Count, 8> & counts)
+void insert_new_state_to_process(const State new_state, const CountArray & counts)
 {
 	if (current_depth == max_depth - 1)
 	{
@@ -234,25 +200,29 @@ void insert_new_state_to_process(const State new_state, const std::array<Count, 
 
 }
 
-void insert_possible_move(const State new_state, const std::array<Count, 8> & counts)
+void insert_possible_move(const State new_state, const CountArray & counts)
 {
-	auto [canonical_state, canonical_index] = get_canonical_state(new_state);
+	State canonical_state = new_state;
+	int canonical_index = 0;
+	for (int i = 1; i < 8; i++)
+	{
+		const State symmetric_state = get_symmetric_state(new_state, i);
+		if (symmetric_state < canonical_state)
+		{
+			canonical_index = i;
+			canonical_state = symmetric_state;
+		}
+	}
 
-	std::array<Count, 8> new_counts;
+	CountArray new_counts;
 	for (int symmetry = 0; symmetry < 8; symmetry++)
 	{
 		new_counts[symmetry] = counts[symmetric_mult[canonical_index * 8 + symmetry]];
 	}
 
-	if ((canonical_state & 0x7)
-		&& (canonical_state & (0x7 << 3))
-		&& (canonical_state & (0x7 << 6))
-		&& (canonical_state & (0x7 << 9))
-		&& (canonical_state & (0x7 << 12))
-		&& (canonical_state & (0x7 << 15))
-		&& (canonical_state & (0x7 << 18))
-		&& (canonical_state & (0x7 << 21))
-		&& (canonical_state & (0x7 << 24)))
+	if ((canonical_state & MASK_0) && (canonical_state & MASK_1) && (canonical_state & MASK_2)
+		&& (canonical_state & MASK_3) && (canonical_state & MASK_4) && (canonical_state & MASK_5)
+		&& (canonical_state & MASK_6) && (canonical_state & MASK_7) && (canonical_state & MASK_8))
 	{
 		// log += " ff-" + std::to_string(state_hash(canonical_state));
 		insert_final_state(canonical_state, new_counts);
@@ -275,7 +245,7 @@ State get_neighbor_mask(const State state, const int position)
 			((!!((mask >> 24) & 0b111)) << 8);
 }
 
-void get_possible_moves(const State state, const std::array<Count, 8> & counts)
+void get_possible_moves(const State state, const CountArray & counts)
 {
 	for (int i = 0; i < 9; i++)
 	{
@@ -291,9 +261,9 @@ void get_possible_moves(const State state, const std::array<Count, 8> & counts)
 			const int sum = n0 + n1; \
 			if (sum <= 6) \
 			{ \
-				State new_state = remove_die(state, i0); \
-				new_state = remove_die(new_state, i1); \
-				new_state = set_die(new_state, i, sum); \
+				State new_state = CLEAR_DIE_VALUE(state, i0); \
+				new_state = CLEAR_DIE_VALUE(new_state, i1); \
+				new_state = SET_DIE_VALUE(new_state, i, sum); \
 				insert_possible_move(new_state, counts); \
 				capture_possible = true; \
 			} \
@@ -304,10 +274,10 @@ void get_possible_moves(const State state, const std::array<Count, 8> & counts)
 			const int sum = n0 + n1 + n2; \
 			if (sum <= 6) \
 			{ \
-				State new_state = remove_die(state, i0); \
-				new_state = remove_die(new_state, i1); \
-				new_state = remove_die(new_state, i2); \
-				new_state = set_die(new_state, i, sum); \
+				State new_state = CLEAR_DIE_VALUE(state, i0); \
+				new_state = CLEAR_DIE_VALUE(new_state, i1); \
+				new_state = CLEAR_DIE_VALUE(new_state, i2); \
+				new_state = SET_DIE_VALUE(new_state, i, sum); \
 				insert_possible_move(new_state, counts); \
 				capture_possible = true; \
 			} \
@@ -361,11 +331,11 @@ void get_possible_moves(const State state, const std::array<Count, 8> & counts)
 			const int sum = first_die_value + second_die_value + third_die_value + fourth_die_value;
 			if (sum <= 6)
 			{
-				State new_state = remove_die(state, first_neighbor_index);
-				new_state = remove_die(new_state, second_neighbor_index);
-				new_state = remove_die(new_state, third_neighbor_index);
-				new_state = remove_die(new_state, fourth_neighbor_index);
-				new_state = set_die(new_state, i, sum);
+				State new_state = CLEAR_DIE_VALUE(state, first_neighbor_index);
+				new_state = CLEAR_DIE_VALUE(new_state, second_neighbor_index);
+				new_state = CLEAR_DIE_VALUE(new_state, third_neighbor_index);
+				new_state = CLEAR_DIE_VALUE(new_state, fourth_neighbor_index);
+				new_state = SET_DIE_VALUE(new_state, i, sum);
 				insert_possible_move(new_state, counts);
 				capture_possible = true;
 			}
@@ -373,7 +343,7 @@ void get_possible_moves(const State state, const std::array<Count, 8> & counts)
 		
 		if (neighbor_count < 2 || !capture_possible)
 		{
-			insert_possible_move(set_die(state, i, 1), counts);
+			insert_possible_move(SET_DIE_VALUE(state, i, 1), counts);
 		}
 	}
 }
@@ -385,23 +355,19 @@ int compute_final_sum()
 
 int main()
 {
-	// std::cin >> max_depth; std::cin.ignore();
+	std::cin >> max_depth; std::cin.ignore();
 	
-	// State initial_state = 0;
-	// for (int i = 0; i < 3; i++)
-	// {
-	// 	for (int j = 0; j < 3; j++)
-	// 	{
-	// 		State value;
-	// 		std::cin >> value; std::cin.ignore();
-	// 		if (value == 0)
-	// 			continue;
-	// 		initial_state = set_die(initial_state, i * 3 + j, value);
-	// 	}
-	// }
+	State initial_state = 0;
+	for (int i = 0; i < 9; i++)
+	{
+		State value;
+		std::cin >> value; std::cin.ignore();
+		initial_state = SET_DIE_VALUE(initial_state, i, value);
+	}
+	
 
-	max_depth = 20;
-	State initial_state = create_state("000000000");
+	// max_depth = 20;
+	// State initial_state = create_state("000000000");
 	
 	new_states_to_process.reserve(100000);
 	states_to_process.reserve(100000);
