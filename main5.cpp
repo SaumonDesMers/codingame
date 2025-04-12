@@ -86,6 +86,13 @@ constexpr State MASK_6 = 0x7 << 18;
 constexpr State MASK_7 = 0x7 << 21;
 constexpr State MASK_8 = 0x7 << 24;
 
+constexpr State MASK_ROW_0 = MASK_0 | MASK_1 | MASK_2;
+constexpr State MASK_ROW_1 = MASK_3 | MASK_4 | MASK_5;
+constexpr State MASK_ROW_2 = MASK_6 | MASK_7 | MASK_8;
+constexpr State MASK_COL_0 = MASK_0 | MASK_3 | MASK_6;
+constexpr State MASK_COL_1 = MASK_1 | MASK_4 | MASK_7;
+constexpr State MASK_COL_2 = MASK_2 | MASK_5 | MASK_8;
+
 
 struct HashTable
 {
@@ -198,13 +205,9 @@ HashTable states_to_process;
 HashTable new_states_to_process;
 uint32_t final_sum = 0;
 
-State create_state(const std::string & state_str)
+// State create_state(const std::string & state_str)
+State create_state(const char * state_str)
 {
-	if (state_str.length() != 9)
-	{
-		std::cerr << "Invalid state string length" << std::endl;
-		return 0;
-	}
 	State state = 0;
 	for (int i = 0; i < 9; i++)
 	{
@@ -215,49 +218,74 @@ State create_state(const std::string & state_str)
 
 State get_symmetric_state(const State state, const int symmetry)
 {
-	#define VERTCAL_FLIP(state) \
-		((state & 0b111'111'111'000'000'000'000'000'000) >> 18) | \
-		((state & 0b000'000'000'000'000'000'111'111'111) << 18) | \
-		(state & 0b000'000'000'111'111'111'000'000'000)
+	#define VERTCAL_FLIP(state) ((state & MASK_ROW_2) >> 18) | ((state & MASK_ROW_0) << 18) | (state & MASK_ROW_1)
 
-	#define HORIZONTAL_FLIP(state) \
-		((state & 0b000'000'111'000'000'111'000'000'111) << 6) | \
-		((state & 0b111'000'000'111'000'000'111'000'000) >> 6) | \
-		(state & 0b000'111'000'000'111'000'000'111'000)
+	#define HORIZONTAL_FLIP(state) ((state & MASK_COL_0) << 6) | ((state & MASK_COL_2) >> 6) | (state & MASK_COL_1)
+
+	#define VH_FLIP(state) \
+		((state & (MASK_0)) << 24) | \
+		((state & (MASK_1)) << 18) | \
+		((state & (MASK_2)) << 12) | \
+		((state & (MASK_3)) << 6) | \
+		(state & (MASK_4)) | \
+		((state & (MASK_5)) >> 6) | \
+		((state & (MASK_6)) >> 12) | \
+		((state & (MASK_7)) >> 18) | \
+		((state & (MASK_8)) >> 24)
 
 	#define DIAGONAL_FLIP(state) \
-		(state & MASK_0) | \
-		((state & MASK_1) << 6) | \
+		(state & (MASK_0 | MASK_4 | MASK_8)) | \
+		((state & (MASK_1 | MASK_5)) << 6) | \
 		((state & MASK_2) << 12) | \
-		((state & MASK_3) >> 6) | \
-		(state & MASK_4) | \
-		((state & MASK_5) << 6) | \
 		((state & MASK_6) >> 12) | \
-		((state & MASK_7) >> 6) | \
-		(state & MASK_8)
+		((state & (MASK_3 | MASK_7)) >> 6)
+	
+	#define DV_FLIP(state) \
+		((state & (MASK_0)) << 18) | \
+		((state & (MASK_1 | MASK_6)) << 6) | \
+		((state & (MASK_2 | MASK_7)) >> 6) | \
+		((state & (MASK_3)) << 12) | \
+		(state & MASK_4) | \
+		((state & (MASK_5)) >> 12) | \
+		((state & (MASK_8)) >> 18)
+	
+	#define DH_FLIP(state) \
+		((state & (MASK_0 | MASK_5)) << 6) | \
+		((state & (MASK_1)) << 12) | \
+		((state & (MASK_2)) << 18) | \
+		((state & (MASK_3 | MASK_8)) >> 6) | \
+		(state & MASK_4) | \
+		((state & (MASK_6)) >> 18) | \
+		((state & (MASK_7)) >> 12)
 
 	#define DVH_FLIP(state) \
 		((state & MASK_0) << 24) | \
-		((state & MASK_1) << 12) | \
-		(state & MASK_2) | \
-		((state & MASK_3) << 12) | \
-		(state & MASK_4) | \
-		((state & MASK_5) >> 12) | \
-		(state & MASK_6) | \
-		((state & MASK_7) >> 12) | \
+		((state & (MASK_1 | MASK_3)) << 12) | \
+		(state & (MASK_2 | MASK_4 | MASK_6)) | \
+		((state & (MASK_5 | MASK_7)) >> 12) | \
 		((state & MASK_8) >> 24)
 
 	switch (symmetry)
 	{
-		case 0: return state; // I
-		case 1: return VERTCAL_FLIP(state); // V
-		case 2: return HORIZONTAL_FLIP(state); // H
-		case 3: { const State v = VERTCAL_FLIP(state); return HORIZONTAL_FLIP(v); }; // VH
-		case 4: return DIAGONAL_FLIP(state); // D
-		case 5: { const State d = DIAGONAL_FLIP(state); return VERTCAL_FLIP(d); }; // DV
-		case 6: { const State d = DIAGONAL_FLIP(state); return HORIZONTAL_FLIP(d); }; // DH
-		case 7: return DVH_FLIP(state); // DVH
-		// case 7: { const State d = DIAGONAL_FLIP(state); const State dv = VERTCAL_FLIP(d); return HORIZONTAL_FLIP(dv); }; // DVH
+		case 0: // I
+			return state;
+		case 1: // V
+			return VERTCAL_FLIP(state);
+		case 2: // H
+			return HORIZONTAL_FLIP(state);
+		case 3: // VH
+			// 	return VH_FLIP(state);
+			{ const State v = VERTCAL_FLIP(state); return HORIZONTAL_FLIP(v); }; // VH
+		case 4: // D
+			return DIAGONAL_FLIP(state); // D
+		case 5: // DV
+			// return DV_FLIP(state);
+			{ const State v = DIAGONAL_FLIP(state); return VERTCAL_FLIP(v); };
+		case 6: // DH
+			return DH_FLIP(state);
+			// { const State h = DIAGONAL_FLIP(state); return HORIZONTAL_FLIP(h); };
+		case 7: // DVH
+			return DVH_FLIP(state);
 	}
 
 	return state;
@@ -439,6 +467,14 @@ int compute_final_sum()
 
 int main()
 {
+	// State s = create_state("123456751");
+	// print_state(s);
+	// State s2 = get_symmetric_state(s, 5);
+	// print_state(s2);
+
+	// return 0;
+
+
 	std::cin >> max_depth; std::cin.ignore();
 	
 	State initial_state = 0;
