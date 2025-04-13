@@ -5,7 +5,7 @@ count=$2
 test_file=(2168.txt 4154.txt 4956.txt 6044.txt 93190.txt 94596.txt 316712.txt)
 
 # Compile the C++ program
-g++ -std=c++17 -o test_prog $1
+g++ -std=c++20 -o test_prog $1
 
 for file in "${test_file[@]}"
 do
