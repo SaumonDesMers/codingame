@@ -33,11 +33,11 @@ void print_state(const State state)
 		for (int j = 0; j < 3; j++)
 		{
 			const int die_value = GET_DIE_VALUE(state, i * 3 + j);
-			// std::cout << die_value << " ";
+			std::cout << die_value << " ";
 		}
-		// std::cout << std::endl;
+		std::cout << std::endl;
 	}
-	// std::cout << std::endl;
+	std::cout << std::endl;
 }
 
 int state_hash(const State state)
@@ -50,18 +50,6 @@ int state_hash(const State state)
 	return state_hash;
 }
 
-
-const std::array<State, 9> neighbors_mask = {
-	0000007070, // 0
-	0000070707, // 1
-	0000700070, // 2
-	0007070007, // 3
-	0070707070, // 4
-	0700070700, // 5
-	0070007000, // 6
-	0707070000, // 7
-	0070700000, // 8
-};
 
 const std::array<uint8_t, 64> symmetric_mult = {
 	0, 1, 2, 3, 4, 5, 6, 7,
@@ -119,7 +107,7 @@ struct HashTable
 		next_storage_index = 0;
 	}
 
-	void insert(const State& new_state, const Count * const counts, const int last_symmetry)
+	void insert(const State new_state, const Count * const counts, const int last_symmetry)
 	{
 		// if (count >= max_size)
 		// {
@@ -315,125 +303,96 @@ void insert_possible_move(const State new_state, const Count * const counts)
 
 }
 
-State get_neighbor_mask(const State state, const int position)
-{
-	const State mask = state & neighbors_mask[position];
-	return	(!!(mask & 0b111)) |
-			((!!((mask >> 3) & 0b111)) << 1) |
-			((!!((mask >> 6) & 0b111)) << 2) |
-			((!!((mask >> 9) & 0b111)) << 3) |
-			((!!((mask >> 12) & 0b111)) << 4) |
-			((!!((mask >> 15) & 0b111)) << 5) |
-			((!!((mask >> 18) & 0b111)) << 6) |
-			((!!((mask >> 21) & 0b111)) << 7) |
-			((!!((mask >> 24) & 0b111)) << 8);
-}
-
 void get_possible_moves(const State state, const Count * const counts)
 {
+	const std::array<uint32_t, 31> captures = {
+		0000007070 | (0 << 27), // 0
+		0000070707 | (1 << 27), // 1
+		0000000707 | (1 << 27),
+		0000070007 | (1 << 27),
+		0000070700 | (1 << 27),
+		0000700070 | (2 << 27), // 2
+		0007070007 | (3 << 27), // 3
+		0000070007 | (3 << 27),
+		0007000007 | (3 << 27),
+		0007070000 | (3 << 27),
+		0070707070 | (4 << 27), // 4
+		0070707000 | (4 << 27),
+		0070700070 | (4 << 27),
+		0070007070 | (4 << 27),
+		0000707070 | (4 << 27),
+		0070700000 | (4 << 27),
+		0000707000 | (4 << 27),
+		0000007070 | (4 << 27),
+		0070000070 | (4 << 27),
+		0000700070 | (4 << 27),
+		0070007000 | (4 << 27),
+		0700070700 | (5 << 27), // 5
+		0000070700 | (5 << 27),
+		0700000700 | (5 << 27),
+		0700070000 | (5 << 27),
+		0070007000 | (6 << 27), // 6
+		0707070000 | (7 << 27), // 7
+		0007070000 | (7 << 27),
+		0700070000 | (7 << 27),
+		0707000000 | (7 << 27),
+		0070700000 | (8 << 27), // 8
+	};
+
+	std::array<State, 40> moves;
+
 	for (int i = 0; i < 9; i++)
 	{
-		if (!IS_POSITION_EMPTY(state, i))
+		moves[i + 31] = SET_DIE_VALUE(state, i, 1) * IS_POSITION_EMPTY(state, i);
+	}
+
+	for (int i = 0; i < 31; i++)
+	{
+		const uint32_t capture = captures[i];
+		const uint32_t capture_mask = capture & ((1ULL << 27) - 1);
+		const uint32_t position = capture >> 27;
+
+		const uint32_t shift = __builtin_ctzll(capture_mask);
+		const uint32_t capture_count = 8 - ((((capture_mask >> shift) * 001010101) >> 18) & 0x7);
+		const uint32_t position_mask = 0b111 << (position * 3);
+
+		const uint32_t neighbor_mask = state & capture_mask;
+		const uint32_t neighbor_mask_shifted = neighbor_mask >> shift;
+		const uint32_t neighbor_sum = ((neighbor_mask_shifted * 001010101) >> 18) & 0b111111;
+		const uint32_t neighbor_count = (((((((neighbor_mask_shifted & 003030303) + 003030303) | neighbor_mask_shifted) & (~003030303)) >> 2) * 0111111111) >> 18) & 0x7;
+
+		const uint32_t is_move_legal = (neighbor_sum <= 6) && (neighbor_count == capture_count) && ((state & position_mask) == 0);
+		
+		moves[i] = ((state & ~capture_mask) | (neighbor_sum << (position * 3))) * is_move_legal;
+		moves[31 + position] *= !is_move_legal;
+	}
+
+	for (int i = 0; i < 40; i++)
+	{
+		if (moves[i] == 0)
 			continue;
 
-		const State neighbor_mask = get_neighbor_mask(state, i);
-		const int neighbor_count = __builtin_popcountll(neighbor_mask);
-		bool capture_possible = false;
+		insert_possible_move(moves[i], counts);
 
-#define two_sum(i0, n0, i1, n1) \
-		{ \
-			const int sum = n0 + n1; \
-			if (sum <= 6) \
-			{ \
-				State new_state = CLEAR_DIE_VALUE(state, i0); \
-				new_state = CLEAR_DIE_VALUE(new_state, i1); \
-				new_state = SET_DIE_VALUE(new_state, i, sum); \
-				insert_possible_move(new_state, counts); \
-				capture_possible = true; \
-			} \
-		}
+		// for (int k = 0; k < 3; k++)
+		// {
+		// 	for (int j = 0; j < 3; j++)
+		// 	{
+		// 		const int die_value = GET_DIE_VALUE(state, k * 3 + j);
+		// 		if (i < 31 ? 0b111 & (captures[i] >> ((k * 3 + j) * 3)) : (k * 3 + j) == (i - 31))
+		// 		{
+		// 			std::cout << "\033[1;31m" << die_value << "\033[0m ";
+		// 		}
+		// 		else
+		// 		{
+		// 			std::cout << die_value << " ";
+		// 		}
+		// 	}
+		// 	std::cout << std::endl;
+		// }
+		// std::cout << std::endl;
 
-#define three_sum(i0, n0, i1, n1, i2, n2) \
-		{ \
-			const int sum = n0 + n1 + n2; \
-			if (sum <= 6) \
-			{ \
-				State new_state = CLEAR_DIE_VALUE(state, i0); \
-				new_state = CLEAR_DIE_VALUE(new_state, i1); \
-				new_state = CLEAR_DIE_VALUE(new_state, i2); \
-				new_state = SET_DIE_VALUE(new_state, i, sum); \
-				insert_possible_move(new_state, counts); \
-				capture_possible = true; \
-			} \
-		}
-
-		switch (neighbor_count)
-		{
-			case 2:
-			{
-				const int first_neighbor_index = __builtin_ctzll(neighbor_mask);
-				const int second_neighbor_index = __builtin_ctzll(neighbor_mask & ~(1 << first_neighbor_index));
-				const int first_die_value = GET_DIE_VALUE(state, first_neighbor_index);
-				const int second_die_value = GET_DIE_VALUE(state, second_neighbor_index);
-		
-				two_sum(first_neighbor_index, first_die_value, second_neighbor_index, second_die_value);
-				break;
-			}
-			case 3:
-			{
-				const int first_neighbor_index = __builtin_ctzll(neighbor_mask);
-				const int second_neighbor_index = __builtin_ctzll(neighbor_mask & ~(1 << first_neighbor_index));
-				const int third_neighbor_index = __builtin_ctzll(neighbor_mask & ~(1 << first_neighbor_index) & ~(1 << second_neighbor_index));
-				const int first_die_value = GET_DIE_VALUE(state, first_neighbor_index);
-				const int second_die_value = GET_DIE_VALUE(state, second_neighbor_index);
-				const int third_die_value = GET_DIE_VALUE(state, third_neighbor_index);
-		
-				two_sum(first_neighbor_index, first_die_value, second_neighbor_index, second_die_value);
-				two_sum(first_neighbor_index, first_die_value, third_neighbor_index, third_die_value);
-				two_sum(second_neighbor_index, second_die_value, third_neighbor_index, third_die_value);
-				three_sum(first_neighbor_index, first_die_value, second_neighbor_index, second_die_value, third_neighbor_index, third_die_value);
-				break;
-			}
-			case 4:
-			{
-				const int first_neighbor_index = __builtin_ctzll(neighbor_mask);
-				const int second_neighbor_index = __builtin_ctzll(neighbor_mask & ~(1 << first_neighbor_index));
-				const int third_neighbor_index = __builtin_ctzll(neighbor_mask & ~(1 << first_neighbor_index) & ~(1 << second_neighbor_index));
-				const int fourth_neighbor_index = __builtin_ctzll(neighbor_mask & ~(1 << first_neighbor_index) & ~(1 << second_neighbor_index) & ~(1 << third_neighbor_index));
-				const int first_die_value = GET_DIE_VALUE(state, first_neighbor_index);
-				const int second_die_value = GET_DIE_VALUE(state, second_neighbor_index);
-				const int third_die_value = GET_DIE_VALUE(state, third_neighbor_index);
-				const int fourth_die_value = GET_DIE_VALUE(state, fourth_neighbor_index);
-		
-				two_sum(first_neighbor_index, first_die_value, second_neighbor_index, second_die_value);
-				two_sum(first_neighbor_index, first_die_value, third_neighbor_index, third_die_value);
-				two_sum(first_neighbor_index, first_die_value, fourth_neighbor_index, fourth_die_value);
-				two_sum(second_neighbor_index, second_die_value, third_neighbor_index, third_die_value);
-				two_sum(second_neighbor_index, second_die_value, fourth_neighbor_index, fourth_die_value);
-				two_sum(third_neighbor_index, third_die_value, fourth_neighbor_index, fourth_die_value);
-				three_sum(first_neighbor_index, first_die_value, second_neighbor_index, second_die_value, third_neighbor_index, third_die_value);
-				three_sum(first_neighbor_index, first_die_value, second_neighbor_index, second_die_value, fourth_neighbor_index, fourth_die_value);
-				three_sum(first_neighbor_index, first_die_value, third_neighbor_index, third_die_value, fourth_neighbor_index, fourth_die_value);
-				three_sum(second_neighbor_index, second_die_value, third_neighbor_index, third_die_value, fourth_neighbor_index, fourth_die_value);
-		
-				const int sum = first_die_value + second_die_value + third_die_value + fourth_die_value;
-				if (sum <= 6)
-				{
-					State new_state = CLEAR_DIE_VALUE(state, first_neighbor_index);
-					new_state = CLEAR_DIE_VALUE(new_state, second_neighbor_index);
-					new_state = CLEAR_DIE_VALUE(new_state, third_neighbor_index);
-					new_state = CLEAR_DIE_VALUE(new_state, fourth_neighbor_index);
-					new_state = SET_DIE_VALUE(new_state, i, sum);
-					insert_possible_move(new_state, counts);
-					capture_possible = true;
-				}
-			}
-		}
-		
-		if (neighbor_count < 2 || !capture_possible)
-		{
-			insert_possible_move(SET_DIE_VALUE(state, i, 1), counts);
-		}
+		// print_state(moves[i]);
 	}
 }
 
@@ -479,10 +438,9 @@ int main()
 			const Count * const counts = states_to_process.storage + index;
 
 			if ((current_depth == max_depth)
-				|| ((state & MASK_0) && (state & MASK_1) && (state & MASK_2)
+				|| (state & MASK_0) && (state & MASK_1) && (state & MASK_2)
 				&& (state & MASK_3) && (state & MASK_4) && (state & MASK_5)
-				&& (state & MASK_6) && (state & MASK_7) && (state & MASK_8)))
-				// || ~(((state & 0333333333) + 0333333333) | state | 037333333333))
+				&& (state & MASK_6) && (state & MASK_7) && (state & MASK_8))
 			{
 				// std::cout << "f-" << state_hash(state) << std::endl;
 				add_final_state(state, counts, 0);
